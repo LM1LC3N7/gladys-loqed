@@ -1,67 +1,149 @@
-# Template de démonstration
+# LOQED pour Gladys Assistant
 
-Ceci est la documentation utilisateur de l'intégration. Gladys ré-héberge ce
-fichier et affiche un lien **Documentation** permanent vers lui dans l'écran
-de configuration (dans la langue de l'utilisateur, avec l'anglais en repli) —
-c'est au moment de configurer que l'utilisateur en a le plus besoin. Gardez
-les courtes indications d'accueil dans les blocs `section` du `config_schema`
-du manifest ; mettez ici le pas-à-pas détaillé (captures d'écran, dépannage…).
+Intégration non officielle, sans lien avec LOQED. Elle amène une serrure
+connectée **LOQED Touch** dans Gladys par l'**API locale de son pont** (le
+petit boîtier branché près de la porte), sur votre réseau, sans le cloud LOQED.
+
+**Jamais testée avec une vraie serrure** : elle a été écrite d'après la
+bibliothèque loqedAPI (utilisée par Home Assistant) et testée contre un faux
+pont. Vos retours sont les bienvenus.
 
 ## Ce que vous obtenez
 
-Six appareils de démonstration apparaissent après l'installation : une
-station météo (vraies données Open-Meteo), un interrupteur, une lampe
-variable, une prise connectée avec mesure de puissance, un détecteur de
-mouvement et une caméra.
+Un appareil par pont (une serrure), avec :
+
+| Fonctionnalité     | Type           | Détail                                                                      |
+| ------------------ | -------------- | --------------------------------------------------------------------------- |
+| État de la serrure | serrure / état | 1 verrouillée (nuit), 0 déverrouillée ou ouverte, 2 en mouvement, 3 bloquée |
+| Position           | texte          | la position en toutes lettres                                               |
+| Batterie           | batterie (%)   | jamais publiée quand la serrure est hors de portée du pont                  |
+| Verrouiller        | bouton         | toujours autorisé                                                           |
+| Déverrouiller      | bouton         | refusé tant que l'option n'est pas activée                                  |
+| Ouvrir la porte    | bouton         | tire le pêne ; refusé sans les deux options                                 |
+| Dernière commande  | texte          | la dernière commande et son issue                                           |
+
+Les commandes sont des **boutons**, jamais un interrupteur : un « tout
+éteindre » (assistant vocal, scène sur les interrupteurs) ne peut pas
+déverrouiller la porte.
 
 ## Configuration
 
-1. Ouvrez l'onglet **Configuration** de l'intégration.
-2. Renseignez la **latitude** et la **longitude** que la station météo de
-   démonstration doit observer (Paris par défaut), et choisissez votre unité
-   de température. L'**intervalle de rafraîchissement** règle la fréquence
-   de lecture de la station météo et de la puissance de la prise : toutes
-   les 5 minutes par défaut, toutes les minutes au plus.
-3. Enregistrez : les appareils apparaissent dans l'onglet **Découverte**,
-   prêts à être ajoutés.
+1. Dans l'application web LOQED, créez une **clé d'API locale** pour votre
+   serrure. La page affiche (noms à vérifier sur une vraie installation) :
+   `bridge_ip`, `lock_key_local_id`, `lock_key_key` et `bridge_key`.
+2. Donnez au pont une adresse IP fixe dans votre box.
+3. Dans Gladys, **Intégrations → LOQED → Configuration** :
+   - **Adresse IP du pont** : `bridge_ip` (une adresse IP, pas un nom) ;
+   - **Numéro de clé** : `lock_key_local_id` (0 à 255) ;
+   - **Clé locale** : `lock_key_key` ;
+   - **Clé du pont** : `bridge_key` (facultative : sans elle, pas de webhook).
+4. Enregistrez, puis **Découverte** : la serrure apparaît après la première
+   lecture du pont ; ajoutez-la.
 
-Le réglage **Préférer la connexion locale** pilote la prise de
-démonstration : elle affiche en badge le canal réellement utilisé (local ou
-cloud), avec un point orange quand elle fonctionne en mode dégradé (local
-refusé, bascule cloud).
+Les deux clés sont gardées par Gladys dans sa base, jamais réaffichées, jamais
+écrites dans les journaux ni dans `/data`. Elles ne circulent jamais sur le
+réseau : seules les signatures qu'elles produisent partent vers le pont. Le pont
+parle en HTTP simple (pas de HTTPS) : quelqu'un qui voit le trafic de votre
+réseau voit l'état de la serrure et les commandes signées (horodatées, donc
+périmées après peu de temps).
 
-## Actions
+L'heure de la machine Gladys doit être juste : chaque commande porte l'heure, et
+le pont refuse sans doute une commande trop décalée (à vérifier).
 
-- **Tester le fournisseur météo** — effectue une requête en direct vers
-  Open-Meteo et affiche la température et l'humidité actuelles sous le
-  bouton.
-- **Identifier un appareil** — choisissez un de vos appareils dans la liste
-  et il se signale (la lampe de démonstration « clignote » dans les logs).
+### Mises à jour immédiates (webhooks)
 
-## Scènes
+Le pont peut prévenir Gladys de chaque changement aussitôt. Saisissez
+**l'adresse IP de Gladys** telle que le pont la voit : l'intégration démarre un
+petit récepteur à côté d'elle (Gladys choisit son port) et inscrit elle-même son
+adresse sur le pont, signée avec la clé du pont. Chaque webhook reçu est vérifié
+avant de compter :
 
-L'intégration ajoute ses propres cartes à l'éditeur de scènes (Gladys 5.1
-ou plus récent), dans la catégorie **Intégrations** :
+- l'adresse exacte (avec un jeton aléatoire) et la méthode POST ;
+- la signature du pont (`HASH`, faite avec la clé du pont) ;
+- l'heure du pont à 30 s près de celle du récepteur ; un webhook resté plus de
+  60 s dans le récepteur est ignoré ; un webhook rejoué est refusé ;
+- l'adresse de l'expéditeur, égale à celle du pont (option « N'accepter les
+  webhooks que depuis l'adresse du pont », activée par défaut) ;
+- l'adresse MAC du pont quand le webhook la donne.
 
-- **Mouvement détecté** (déclencheur) — lance la scène quand un détecteur
-  de démonstration voit bouger quelque chose. Choisissez éventuellement le
-  détecteur et ce qui a bougé (personne, animal) ; laissés vides, toute
-  détection correspond. Les actions suivantes peuvent lire ce qui a bougé
-  avec `{{triggerEvent.data.target}}`.
-- **Identifier un appareil** (action) — fait se signaler l'appareil choisi.
-  Elle indique si l'appareil a pu se signaler, pour que les actions
-  suivantes puissent en dépendre.
+Le récepteur borne tout : 4 Ko par webhook, 16 connexions (4 par adresse),
+10 s par requête, 120 webhooks par minute (30 pour une autre adresse que celle
+du pont). L'intégration ne retire du pont que les adresses qu'elle y a inscrites
+elle-même (celles d'autres logiciels restent).
 
-## Tableau de bord
+Sans adresse de Gladys ou sans clé du pont, le pont est seulement lu à
+l'intervalle choisi (30 s par défaut, de 10 à 600 s).
 
-Ajoutez le widget **État de la démo** à un tableau de bord : il affiche en
-direct la température de la station météo et la puissance de la prise du
-bureau, la connexion utilisée par la prise (en orange si dégradée) et la
-position observée. Son bouton **Identifier la lampe** fait se signaler la
-lampe de démonstration.
+## Verrouiller
 
-## Dépannage
+Le verrouillage (verrou de nuit) part **tout de suite**, quelles que soient les
+options, une lecture en cours (elle est coupée), une pause demandée par le pont,
+l'identité du pont, ou `/data` (jamais attendu sur ce chemin). Ensuite :
 
-L'intégration journalise tout ce qu'elle fait : consultez les logs de
-l'intégration depuis l'interface Gladys (ou `docker logs` sur l'hôte) avec
-`LOG_LEVEL=debug` pour le détail complet.
+- s'il n'a pas pu partir (pont injoignable), il est réessayé pendant 250 ms,
+  puis gardé dans `/data` et renvoyé toutes les 10 s jusqu'à ce qu'il parte ; il
+  n'est jamais abandonné pour cette raison, et il repart au redémarrage de
+  l'intégration avant toute lecture ;
+- il est confirmé par une lecture du pont **partie après lui** qui montre la
+  serrure verrouillée ; tant que ce n'est pas le cas, il est renvoyé (au plus
+  toutes les 6 s) ;
+- seul un envoi auquel le pont a répondu « OK » compte comme essai : après
+  3 envois acceptés sans que la serrure se dise verrouillée, il est abandonné et
+  « Dernière commande » le dit. Une coupure, un délai, une erreur du pont ou un
+  refus de la clé ne comptent pas ;
+- une manœuvre faite ensuite avec une autre clé (application, clavier),
+  signalée par un webhook signé au moins 2 s après l'envoi, met fin aux renvois.
+
+Le verrouillage reste en attente, sans partir, dans ces cas seulement :
+
+- pas d'adresse du pont, ou numéro de clé ou clé locale invalides : il part dès
+  qu'ils sont enregistrés ;
+- le pont a refusé la clé locale : chaque clic l'envoie encore une fois, mais il
+  ne repart plus de lui-même tant qu'une autre clé n'est pas enregistrée ou que
+  « Tester la connexion » n'a pas réussi (il part alors en premier).
+
+Si `/data` est illisible, le verrouillage part quand même, mais ne survit pas à
+un redémarrage.
+
+## Déverrouiller et ouvrir
+
+Désactivés par défaut : **Autoriser le déverrouillage** permet Déverrouiller
+(verrou de jour) ; **Ouvrir la porte** (tirer le pêne) demande cette option
+**et** « Autoriser l'ouverture de la porte ». Une commande à la fois. Chacune
+est refusée, sans rien envoyer, si :
+
+- l'option manque (vérifiée encore juste avant le premier octet) ;
+- une autre commande de déverrouillage ou d'ouverture est en cours ;
+- le numéro de clé ou la clé locale manquent, ou le pont les a refusés ;
+- `/data` est illisible, ou la garde de la commande n'a pas pu y être écrite
+  dans les 3,2 s ;
+- un verrouillage est en attente, ou a été demandé pendant la commande ;
+- le pont n'est pas encore identifié, ou un autre pont répond à l'adresse ;
+- la lecture du pont faite après le clic a échoué ou n'est pas venue en 2,5 s ;
+- la serrure n'est pas connectée au pont, ou elle est en mouvement, bloquée ou
+  dans un état inconnu ;
+- elle n'a pas pu partir dans les 3,5 s après le clic.
+
+Déverrouiller une serrure déjà déverrouillée n'envoie rien. Une commande partie
+sans réponse du pont est signalée « envoyée, sans confirmation » (la serrure
+peut bouger) et la serrure est relue.
+
+## Statut et actions
+
+Le statut de l'écran Configuration dit si le pont répond, si les webhooks sont
+actifs, si un verrouillage attend, si la serrure est hors de portée, et pourquoi
+quelque chose est refusé. Un pont qui répond une erreur 429 ou 5xx met les
+lectures en pause (1 min à 6 h) ; le verrouillage part quand même.
+
+- **Tester la connexion** : lit le pont, inscrit le webhook, et lève un refus de
+  la clé locale (un verrouillage en attente part alors en premier). La clé
+  locale ne peut être vérifiée que par une vraie commande.
+- **Utiliser le pont qui répond maintenant** : seulement après un remplacement
+  du pont. Appuyez deux fois dans la minute ; sa serrure devient un nouvel
+  appareil (l'identifiant de l'appareil est l'adresse MAC du pont).
+
+## Limites connues
+
+- Un seul pont (une serrure) par installation de l'intégration.
+- Pas de Bluetooth, pas de cloud LOQED.
+- Les réglages de la serrure (mode fête, accès invité) ne sont pas lus.

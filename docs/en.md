@@ -1,61 +1,144 @@
-# Demo Devices Template
+# LOQED for Gladys Assistant
 
-This is the user documentation of the integration. Gladys re-hosts this file
-and shows a permanent **Documentation** link to it in the Configuration screen
-(in the user's language, with English as the fallback) — it is when
-configuring that the user needs it most. Keep the short onboarding hints in
-the `section` blocks of the manifest `config_schema`; put the long
-step-by-step (screenshots, troubleshooting…) here.
+Unofficial integration, not affiliated with LOQED. It brings a **LOQED Touch**
+smart lock into Gladys through the **local API of its bridge** (the small box
+plugged in near the door), on your network, without the LOQED cloud.
+
+**Never tested with a real lock**: it was written from the loqedAPI library
+(used by Home Assistant) and tested against a fake bridge. Your feedback is
+welcome.
 
 ## What you get
 
-Six demo devices show up after installation: a weather station (real data
-from Open-Meteo), a switch, a dimmable light, a smart plug with power
-metering, a motion sensor and a camera.
+One device per bridge (one lock), with:
 
-## Configuration
+| Feature       | Type         | Detail                                                        |
+| ------------- | ------------ | ------------------------------------------------------------- |
+| Lock state    | lock / state | 1 locked (night lock), 0 unlocked or open, 2 moving, 3 jammed |
+| Position      | text         | the position in words                                         |
+| Battery       | battery (%)  | never published while the lock is out of reach of the bridge  |
+| Lock          | button       | always allowed                                                |
+| Unlock        | button       | refused until the option is on                                |
+| Open the door | button       | pulls the latch; refused without both options                 |
+| Last command  | text         | the last command and how it ended                             |
 
-1. Open the **Configuration** tab of the integration.
-2. Set the **latitude** and **longitude** the demo weather station should
-   observe (they default to Paris), and pick your temperature unit.
-   The **refresh interval** sets how often the weather station and the
-   plug's power are read: every 5 minutes by default, every minute at most.
-3. Save: the devices appear in the **Discovery** tab, ready to be added.
+The commands are **buttons**, never a switch: a "turn everything off" (voice
+assistant, scene on switches) cannot unlock the door.
 
-The **Prefer the local connection** toggle drives the demo plug: it reports
-the channel it actually uses as a badge (local or cloud), with an orange dot
-when it runs degraded (local refused, cloud fallback).
+## Setup
 
-## Actions
+1. In the LOQED web app, create a **local API key** for your lock. The page
+   shows (names to check on a real installation): `bridge_ip`,
+   `lock_key_local_id`, `lock_key_key` and `bridge_key`.
+2. Give the bridge a fixed IP address in your router.
+3. In Gladys, **Integrations → LOQED → Configuration**:
+   - **IP address of the bridge**: `bridge_ip` (an IP address, not a name);
+   - **Key id**: `lock_key_local_id` (0 to 255);
+   - **Local key**: `lock_key_key`;
+   - **Bridge key**: `bridge_key` (optional: without it, no webhook).
+4. Save, then **Discovery**: the lock appears after the first read of the
+   bridge; add it.
 
-- **Test the weather provider** — performs a live request to Open-Meteo and
-  shows the current temperature and humidity under the button.
-- **Identify a device** — pick one of your devices in the list and it will
-  signal itself (the demo light "blinks" in the logs).
+Both keys are kept by Gladys in its database, never shown again, never written
+to the logs nor to `/data`. They never travel on the network: only the
+signatures they make go to the bridge. The bridge speaks plain HTTP (no HTTPS):
+someone who sees the traffic of your network sees the lock state and the signed
+commands (dated, so stale after a short time).
 
-## Scenes
+The clock of the Gladys machine must be right: each command carries the time,
+and the bridge probably refuses a command too far off (to check).
 
-The integration adds its own cards to the scene editor (Gladys 5.1 or
-later), under the **Integrations** category:
+### Instant updates (webhooks)
 
-- **Motion detected** (trigger) — starts the scene when a demo motion sensor
-  sees something move. Optionally pick the sensor and what moved (person,
-  animal); left empty, any detection matches. The following actions can
-  read what moved with `{{triggerEvent.data.target}}`.
-- **Identify a device** (action) — makes the chosen device signal itself.
-  It returns whether the device could signal itself, so the following
-  actions can depend on it.
+The bridge can tell Gladys each change at once. Enter the **IP address of
+Gladys** as the bridge sees it: the integration starts a small receiver next to
+it (Gladys picks its port) and registers its address at the bridge by itself,
+signed with the bridge key. Each webhook received is checked before it counts:
 
-## Dashboard
+- the exact address (with a random token) and the POST method;
+- the signature of the bridge (`HASH`, made with the bridge key);
+- the bridge time within 30 s of the receiver time; a webhook kept more than
+  60 s in the receiver is ignored; a replayed webhook is refused;
+- the address of the sender, equal to the bridge's (option "Accept webhooks
+  only from the address of the bridge", on by default);
+- the MAC address of the bridge when the webhook gives it.
 
-Add the **Demo status** widget to a dashboard: it shows the live
-temperature of the weather station and the power of the office plug, the
-connection the plug currently uses (orange when degraded) and the observed
-location. Its **Identify the light** button makes the demo light signal
-itself.
+The receiver bounds everything: 4 KB per webhook, 16 connections (4 per
+address), 10 s per request, 120 webhooks a minute (30 for an address other than
+the bridge's). The integration only withdraws from the bridge the addresses it
+registered itself (those of other software stay).
 
-## Troubleshooting
+Without the address of Gladys or the bridge key, the bridge is only read at the
+chosen interval (30 s by default, 10 to 600 s).
 
-The integration logs everything it does: check the integration logs from the
-Gladys UI (or `docker logs` on the host) with `LOG_LEVEL=debug` for the full
-detail.
+## Locking
+
+Locking (night lock) leaves **at once**, whatever the options, a read in flight
+(it is cut), a pause asked by the bridge, the identity of the bridge, or `/data`
+(never awaited on this path). Then:
+
+- if it could not leave (bridge unreachable), it is tried again for 250 ms,
+  then kept in `/data` and sent again every 10 s until it leaves; it is never
+  given up for that reason, and it leaves again when the integration restarts,
+  before any read;
+- it is confirmed by a read of the bridge **started after it** that shows the
+  lock locked; until then, it is sent again (at most every 6 s);
+- only a send the bridge answered "OK" counts as a try: after 3 accepted sends
+  without the lock reporting it locked, it is given up and "Last command" says
+  so. A cut, a timeout, an error of the bridge or a refused key do not count;
+- a movement made afterwards with another key (app, keypad), reported by a
+  signed webhook at least 2 s after the send, ends the resends.
+
+Locking waits, without leaving, in these cases only:
+
+- no bridge address, or an invalid key id or local key: it leaves as soon as
+  they are saved;
+- the bridge refused the local key: each click still sends it once, but it no
+  longer leaves by itself until another key is saved or "Test the connection"
+  succeeds (it then leaves first).
+
+If `/data` cannot be read, locking still leaves, but does not survive a
+restart.
+
+## Unlocking and opening
+
+Off by default: **Allow unlocking** allows Unlock (day lock); **Open the door**
+(pulling the latch) needs that option **and** "Allow opening the door". One
+command at a time. Each one is refused, with nothing sent, when:
+
+- the option is missing (checked again right before the first byte);
+- another unlock or open is in progress;
+- the key id or the local key is missing, or the bridge refused them;
+- `/data` cannot be read, or the guard of the command could not be written
+  there within 3.2 s;
+- a lock is waiting, or was asked during the command;
+- the bridge is not identified yet, or another bridge answers at the address;
+- the read of the bridge made after the click failed or did not come within
+  2.5 s;
+- the lock is not connected to the bridge, or it is moving, jammed or in an
+  unknown state;
+- it could not leave within 3.5 s of the click.
+
+Unlocking a lock already unlocked sends nothing. A command that left without an
+answer from the bridge is reported "sent, without confirmation" (the lock may
+move) and the lock is read again.
+
+## Status and actions
+
+The status of the Configuration screen says whether the bridge answers, whether
+the webhooks are on, whether a lock is waiting, whether the lock is out of
+reach, and why something is refused. A bridge answering a 429 or 5xx error
+pauses the reads (1 min to 6 h); locking still leaves.
+
+- **Test the connection**: reads the bridge, registers the webhook, and lifts a
+  refusal of the local key (a waiting lock then leaves first). The local key
+  can only be checked by a real command.
+- **Use the bridge now answering**: only after replacing the bridge. Press
+  twice within a minute; its lock becomes a new device (the device id is the
+  MAC address of the bridge).
+
+## Known limits
+
+- One bridge (one lock) per installation of the integration.
+- No Bluetooth, no LOQED cloud.
+- The settings of the lock (party mode, guest access) are not read.

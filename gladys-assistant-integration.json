@@ -1,177 +1,259 @@
 {
   "manifest_version": 1,
   "type": "device",
-  "name": "Demo Devices Template",
+  "name": "LOQED",
   "description": {
-    "en": "Starter template showing sensors, a switch, a dimmable light and a smart plug.",
-    "fr": "Template de démarrage : capteurs, interrupteur, lampe variable et prise connectée."
+    "en": "LOQED Touch smart lock through the local API of its bridge.",
+    "fr": "Serrure connectée LOQED Touch par l'API locale de son pont."
   },
-  "version": "1.0.0",
-  "docker_image": "ghcr.io/gladysassistant/integration-template-js:1.0.0",
+  "version": "0.1.0",
+  "docker_image": "ghcr.io/lm1lc3n7/gladys-loqed:0.1.0",
   "gladys_version": ">=5.1.0",
-  "cover_image": "https://raw.githubusercontent.com/GladysAssistant/integration-template-js/master/cover.png",
-  "categories": ["lighting", "security", "environment"],
-  "transports": ["local", "cloud"],
+  "cover_image": "https://raw.githubusercontent.com/LM1LC3N7/gladys-loqed/main/cover.png",
+  "categories": ["security"],
+  "transports": ["local"],
+  "containers": [
+    {
+      "name": "loqed-webhook",
+      "docker_image": "ghcr.io/lm1lc3n7/gladys-loqed:0.1.0",
+      "command": ["node", "src/receiver.js"],
+      "start": "manual",
+      "read_only": true,
+      "memory_mb": 64,
+      "cpu": 0.1,
+      "ports": [
+        {
+          "container_port": 8080,
+          "protocol": "tcp",
+          "name": "loqed_webhook",
+          "label": {
+            "en": "LOQED webhook receiver (HTTP)",
+            "fr": "Récepteur des webhooks LOQED (HTTP)"
+          },
+          "browsable": false
+        }
+      ]
+    }
+  ],
   "config_schema": [
     {
       "key": "intro",
       "type": "section",
-      "label": { "en": "Getting started", "fr": "Pour commencer" },
+      "label": {
+        "en": "Your LOQED bridge, on your local network",
+        "fr": "Votre pont LOQED, sur votre réseau local"
+      },
       "description": {
-        "en": "The demo weather station reads real data from the free Open-Meteo API: pick the coordinates to observe. No account, no API key.",
-        "fr": "La station météo de démonstration lit de vraies données via l'API gratuite Open-Meteo : choisissez les coordonnées à observer. Pas de compte, pas de clé d'API."
+        "en": "Brings a LOQED Touch smart lock into Gladys through the local API of its bridge, without the LOQED cloud: lock state (locked, unlocked, open, moving, jammed), battery, Lock, Unlock and Open buttons. In the LOQED web app, create a local API key: it shows the bridge IP address, the key id, the local key and the bridge key; copy them here. Locking is always possible; unlocking and opening the door stay off until you allow them below. Never tested with a real lock. Unofficial, not affiliated with LOQED.",
+        "fr": "Amène une serrure connectée LOQED Touch dans Gladys par l'API locale de son pont, sans le cloud LOQED : état (verrouillée, déverrouillée, ouverte, en mouvement, bloquée), batterie, boutons Verrouiller, Déverrouiller et Ouvrir. Dans l'application web LOQED, créez une clé d'API locale : elle affiche l'adresse IP du pont, le numéro de clé, la clé locale et la clé du pont ; copiez-les ici. Le verrouillage est toujours possible ; le déverrouillage et l'ouverture de la porte restent désactivés tant que vous ne les autorisez pas ci-dessous. Jamais testé avec une vraie serrure. Non officiel, sans lien avec LOQED."
       },
       "links": [
         {
-          "url": "https://open-meteo.com/en/docs",
-          "label": { "en": "Open-Meteo documentation", "fr": "Documentation Open-Meteo" }
+          "url": "https://github.com/LM1LC3N7/gladys-loqed/blob/main/docs/fr.md",
+          "label": {
+            "en": "Guide (French)",
+            "fr": "Guide (français)"
+          }
+        },
+        {
+          "url": "https://github.com/LM1LC3N7/gladys-loqed/blob/main/docs/en.md",
+          "label": {
+            "en": "Guide (English)",
+            "fr": "Guide (anglais)"
+          }
         }
       ]
     },
     {
-      "key": "latitude",
-      "type": "number",
-      "label": { "en": "Latitude", "fr": "Latitude" },
-      "description": {
-        "en": "Latitude used for the demo weather sensor.",
-        "fr": "Latitude utilisée par le capteur météo de démonstration."
+      "key": "bridge_address",
+      "type": "string",
+      "label": {
+        "en": "IP address of the bridge",
+        "fr": "Adresse IP du pont"
       },
-      "placeholder": { "en": "e.g. 48.8566", "fr": "ex. 48.8566" },
-      "required": true,
-      "default": 48.8566,
-      "min": -90,
-      "max": 90
+      "description": {
+        "en": "An IP address (bridge_ip in the LOQED web app), not a name; give the bridge a fixed address in your router.",
+        "fr": "Une adresse IP (bridge_ip dans l'application web LOQED), pas un nom ; donnez au pont une adresse fixe dans votre box."
+      },
+      "placeholder": {
+        "en": "192.168.1.50",
+        "fr": "192.168.1.50"
+      },
+      "required": true
     },
     {
-      "key": "longitude",
+      "key": "key_id",
       "type": "number",
-      "label": { "en": "Longitude", "fr": "Longitude" },
-      "description": {
-        "en": "Longitude used for the demo weather sensor.",
-        "fr": "Longitude utilisée par le capteur météo de démonstration."
+      "label": {
+        "en": "Key id",
+        "fr": "Numéro de clé"
       },
-      "placeholder": { "en": "e.g. 2.3522", "fr": "ex. 2.3522" },
+      "description": {
+        "en": "lock_key_local_id in the LOQED web app (0 to 255).",
+        "fr": "lock_key_local_id dans l'application web LOQED (0 à 255)."
+      },
       "required": true,
-      "default": 2.3522,
-      "min": -180,
-      "max": 180
+      "default": 1,
+      "min": 0,
+      "max": 255
     },
     {
-      "key": "unit",
+      "key": "local_key",
+      "type": "secret",
+      "label": {
+        "en": "Local key",
+        "fr": "Clé locale"
+      },
+      "description": {
+        "en": "lock_key_key in the LOQED web app: signs the commands. Kept by Gladys in its database, never shown again, never sent on the network (only the signatures it makes go to the bridge).",
+        "fr": "lock_key_key dans l'application web LOQED : signe les commandes. Gardée par Gladys dans sa base, jamais réaffichée, jamais envoyée sur le réseau (seules les signatures qu'elle produit vont au pont)."
+      },
+      "required": true
+    },
+    {
+      "key": "bridge_key",
+      "type": "secret",
+      "label": {
+        "en": "Bridge key",
+        "fr": "Clé du pont"
+      },
+      "description": {
+        "en": "bridge_key in the LOQED web app: signs the webhooks of the bridge and their registration. Kept by Gladys in its database, never shown again, never sent on the network. Without it, the bridge is only read.",
+        "fr": "bridge_key dans l'application web LOQED : signe les webhooks du pont et leur inscription. Gardée par Gladys dans sa base, jamais réaffichée, jamais envoyée sur le réseau. Sans elle, le pont est seulement lu."
+      },
+      "required": false
+    },
+    {
+      "key": "allow_unlock",
+      "type": "boolean",
+      "label": {
+        "en": "Allow unlocking from Gladys",
+        "fr": "Autoriser le déverrouillage depuis Gladys"
+      },
+      "description": {
+        "en": "Off by default: Gladys can lock, never unlock.",
+        "fr": "Désactivé par défaut : Gladys peut verrouiller, jamais déverrouiller."
+      },
+      "required": false,
+      "default": false
+    },
+    {
+      "key": "allow_open",
+      "type": "boolean",
+      "label": {
+        "en": "Allow opening the door from Gladys",
+        "fr": "Autoriser l'ouverture de la porte depuis Gladys"
+      },
+      "description": {
+        "en": "Off by default. Opening pulls the latch: the door opens. It also needs the unlocking option.",
+        "fr": "Désactivé par défaut. Ouvrir tire le pêne : la porte s'ouvre. Demande aussi l'option de déverrouillage."
+      },
+      "required": false,
+      "default": false
+    },
+    {
+      "key": "webhooks",
+      "type": "section",
+      "label": {
+        "en": "Instant updates (webhooks)",
+        "fr": "Mises à jour immédiates (webhooks)"
+      },
+      "description": {
+        "en": "The bridge can tell Gladys each change at once. Enter the IP address of the Gladys machine as the bridge sees it (often {{gladys_host}}); the integration then registers the address http://<that address>:{{port:loqed_webhook}}/loqed/… at the bridge by itself, signed with the bridge key. Without it, the bridge is read at the interval below.",
+        "fr": "Le pont peut prévenir Gladys de chaque changement aussitôt. Saisissez l'adresse IP de la machine Gladys telle que le pont la voit (souvent {{gladys_host}}) ; l'intégration inscrit alors elle-même l'adresse http://<cette adresse>:{{port:loqed_webhook}}/loqed/… sur le pont, signée avec la clé du pont. Sans elle, le pont est lu à l'intervalle ci-dessous."
+      }
+    },
+    {
+      "key": "callback_address",
+      "type": "string",
+      "label": {
+        "en": "IP address of Gladys (for the bridge)",
+        "fr": "Adresse IP de Gladys (pour le pont)"
+      },
+      "placeholder": {
+        "en": "192.168.1.10",
+        "fr": "192.168.1.10"
+      },
+      "required": false,
+      "default": ""
+    },
+    {
+      "key": "check_webhook_source",
+      "type": "boolean",
+      "label": {
+        "en": "Accept webhooks only from the address of the bridge",
+        "fr": "N'accepter les webhooks que depuis l'adresse du pont"
+      },
+      "description": {
+        "en": "On by default. Turn it off only if your Docker setup hides the address of the sender (the signature is checked anyway).",
+        "fr": "Activé par défaut. Désactivez-le seulement si votre installation Docker masque l'adresse de l'expéditeur (la signature est vérifiée de toute façon)."
+      },
+      "required": false,
+      "default": true
+    },
+    {
+      "key": "poll_interval",
+      "type": "number",
+      "label": {
+        "en": "Refresh interval (s)",
+        "fr": "Intervalle de rafraîchissement (s)"
+      },
+      "description": {
+        "en": "How often the bridge is read, in seconds (10 to 600).",
+        "fr": "Fréquence de lecture du pont, en secondes (10 à 600)."
+      },
+      "required": false,
+      "default": 30,
+      "min": 10,
+      "max": 600
+    },
+    {
+      "key": "language",
       "type": "select",
-      "label": { "en": "Temperature unit", "fr": "Unité de température" },
-      "required": false,
-      "default": "celsius",
-      "options": [
-        { "value": "celsius", "label": { "en": "Celsius", "fr": "Celsius" } },
-        { "value": "fahrenheit", "label": { "en": "Fahrenheit", "fr": "Fahrenheit" } }
-      ]
-    },
-    {
-      "key": "poll_frequency",
-      "type": "number",
-      "label": { "en": "Refresh interval (s)", "fr": "Intervalle de rafraîchissement (s)" },
+      "label": {
+        "en": "Language of the feature names",
+        "fr": "Langue des noms des fonctionnalités"
+      },
       "description": {
-        "en": "How often sensors are polled, in seconds (one minute minimum).",
-        "fr": "Fréquence d'interrogation des capteurs, en secondes (une minute minimum)."
+        "en": "Used for the names of the features of the devices added from now on, and for the status texts.",
+        "fr": "Sert aux noms des fonctionnalités des appareils ajoutés désormais, et aux textes de statut."
       },
       "required": false,
-      "default": 300,
-      "min": 60,
-      "max": 3600
+      "default": "fr",
+      "options": [
+        {
+          "value": "fr",
+          "label": {
+            "en": "French",
+            "fr": "Français"
+          }
+        },
+        {
+          "value": "en",
+          "label": {
+            "en": "English",
+            "fr": "Anglais"
+          }
+        }
+      ]
     }
   ],
   "actions": [
     {
-      "key": "test_weather",
-      "label": { "en": "Test the weather provider", "fr": "Tester le fournisseur météo" },
+      "key": "test_connection",
+      "label": {
+        "en": "Test the connection",
+        "fr": "Tester la connexion"
+      },
       "timeout_seconds": 30
     },
     {
-      "key": "identify",
-      "label": { "en": "Identify a device", "fr": "Identifier un appareil" },
-      "fields": [
-        {
-          "key": "device",
-          "type": "select",
-          "source": "devices",
-          "label": { "en": "Device", "fr": "Appareil" },
-          "required": true
-        }
-      ]
-    }
-  ],
-  "scene_triggers": [
-    {
-      "key": "motion_detected",
-      "label": { "en": "Motion detected", "fr": "Mouvement détecté" },
-      "description": {
-        "en": "A demo motion sensor saw a person or an animal move.",
-        "fr": "Un détecteur de démonstration a vu bouger une personne ou un animal."
+      "key": "adopt_bridge",
+      "label": {
+        "en": "Use the bridge now answering",
+        "fr": "Utiliser le pont qui répond maintenant"
       },
-      "fields": [
-        {
-          "key": "device",
-          "type": "select",
-          "source": "devices",
-          "label": { "en": "Sensor", "fr": "Détecteur" }
-        },
-        {
-          "key": "target",
-          "type": "multi_select",
-          "label": { "en": "What moved", "fr": "Ce qui a bougé" },
-          "options": [
-            { "value": "person", "label": { "en": "Person", "fr": "Personne" } },
-            { "value": "animal", "label": { "en": "Animal", "fr": "Animal" } }
-          ]
-        }
-      ],
-      "variables": [
-        {
-          "key": "target",
-          "type": "string",
-          "label": { "en": "What moved", "fr": "Ce qui a bougé" }
-        }
-      ]
-    }
-  ],
-  "scene_actions": [
-    {
-      "key": "identify_device",
-      "label": { "en": "Identify a device", "fr": "Identifier un appareil" },
-      "description": {
-        "en": "Make a device signal itself (the demo light blinks).",
-        "fr": "Fait se signaler un appareil (la lampe de démonstration clignote)."
-      },
-      "timeout_seconds": 15,
-      "fields": [
-        {
-          "key": "device",
-          "type": "select",
-          "source": "devices",
-          "label": { "en": "Device", "fr": "Appareil" },
-          "required": true
-        }
-      ],
-      "outputs": [
-        {
-          "key": "signalled",
-          "type": "boolean",
-          "label": { "en": "Device signalled", "fr": "Appareil signalé" }
-        }
-      ]
-    }
-  ],
-  "widgets": [
-    {
-      "key": "demo_status",
-      "label": { "en": "Demo status", "fr": "État de la démo" },
-      "description": {
-        "en": "Live temperature and plug power, plug connection and observed location.",
-        "fr": "Température et puissance en direct, connexion de la prise, position observée."
-      },
-      "icon": "activity",
-      "action_timeout_seconds": 15
+      "timeout_seconds": 30
     }
   ]
 }

@@ -15,9 +15,9 @@ its only runtime dependency. It started from the official JavaScript template.
 
 ```bash
 npm install
-npm test                                  # node --test, the built-in runner
-node --test test/devices.test.js          # one file
-node --test --test-name-pattern "plug"    # tests whose name matches
+npm test                                  # node --test test/*.test.js (60 s per test at most)
+node --test test/app.test.js              # one file
+node --test --test-name-pattern "unlock"  # tests whose name matches
 npm run lint                              # ESLint
 npm run format:check                      # Prettier, as the CI runs it
 npm run format                            # Prettier, fix in place
@@ -31,18 +31,39 @@ pushing.
 ## Architecture
 
 ```
-index.js                          SDK wiring only: handlers registered before connect()
-src/devices/index.js              registry of the device blueprints + dispatch helpers
-src/devices/<type>.js             one device type per file (buildDevice, onPoll, onSetValue...)
-src/scenes.js                     scene action handlers (manifest `scene_actions`)
-src/widgets.js                    dashboard widget handlers (manifest `widgets`)
+index.js                          SDK wiring only (src/handlers.js, before connect())
+src/handlers.js                   the SDK handlers -> LoqedApp (shared with the tests)
+src/app.js                        LoqedApp: reads, webhooks, devices, commands and their safety rules
+src/bridge.js                     HTTP client of the bridge (bounded, beforeSend, notSent)
+src/loqed.js                      the LOQED protocol, pure (ported from loqedAPI, BSD-2-Clause)
+src/devices.js                    the Gladys device of the lock (pure)
+src/publisher.js                  states to Gladys within 250/min
+src/store.js                      /data/loqed.json, every load and save bounded in time
 src/config.js                     DEFAULT_CONFIG (mirrors the manifest defaults) + normalization
-src/weather.js                    example driver (Open-Meteo)
-gladys-assistant-integration.json manifest: name, config_schema, actions, image...
+src/channel.js                    the authenticated channel main container <-> receiver
+src/receiver.js, src/push/        the loqed-webhook sub-container (HTTP endpoint of the webhooks)
+src/constants.js, src/i18n.js     protocol values, limits, timings; en/fr texts
+gladys-assistant-integration.json manifest: name, config_schema, containers, actions...
 docs/en.md, docs/fr.md            user documentation, re-hosted by Gladys (mandatory)
-test/                             node --test, against the SDK's fake Gladys (integration-sdk/testing)
+test/                             node --test: SDK fake Gladys + fake bridge on 127.0.0.1
 .github/scripts/release.mjs       release helpers (manifest bump, changelog), tested in test/
+TODO.md                           status, things to check on a real bridge, decisions
+THIRD_PARTY_NOTICES.md            BSD-2-Clause notice of loqedAPI, copied into the image
 ```
+
+## Safety rules (lock)
+
+Locking is never held back: not by the options, a read in flight (cancelled),
+a pause, the identity of the bridge, or /data (never awaited on its path). It
+is kept in /data until a read started after it shows the lock locked; only a
+send answered 2xx counts as a try (3 at most); one that never left is never
+given up. Unlocking (`allow_unlock`) and opening (`allow_open`, which needs
+`allow_unlock` too) stay off by default, are buttons (never a switch nor a
+commandable binary), run one at a time, are decided on a read started after
+the click, write their guard to /data before the first byte, and check the
+option, a lock clicked since and the 3.5 s deadline again in `beforeSend`. A
+read started before a command is never applied after it. Never weaken these
+rules; every guard has a test that fails when it is removed.
 
 ## Rules
 
@@ -73,4 +94,5 @@ test/                             node --test, against the SDK's fake Gladys (in
 - **User-facing text** is bilingual (English and French): action messages,
   manifest texts, and `docs/en.md` / `docs/fr.md`, kept in sync.
 - **Style.** Prettier formats, ESLint catches mistakes. Comments explain why,
-  in English. Tests never touch the network.
+  in English. Tests never leave 127.0.0.1 (the fake bridge), and every wait in
+  a test is bounded: a test fails, it never hangs.
