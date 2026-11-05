@@ -61,7 +61,9 @@ avant de compter :
 - l'adresse exacte (avec un jeton aléatoire) et la méthode POST ;
 - la signature du pont (`HASH`, faite avec la clé du pont) ;
 - l'heure du pont à 30 s près de celle du récepteur ; un webhook resté plus de
-  60 s dans le récepteur est ignoré ; un webhook rejoué est refusé ;
+  60 s dans le récepteur est ignoré ; un webhook rejoué est refusé ; un webhook
+  daté d'avant le dernier démarrage de l'intégration déclenche seulement une
+  lecture ;
 - l'adresse de l'expéditeur, égale à celle du pont (option « N'accepter les
   webhooks que depuis l'adresse du pont », activée par défaut) ;
 - l'adresse MAC du pont quand le webhook la donne.
@@ -102,8 +104,13 @@ Le verrouillage reste en attente, sans partir, dans ces cas seulement :
   ne repart plus de lui-même tant qu'une autre clé n'est pas enregistrée ou que
   « Tester la connexion » n'a pas réussi (il part alors en premier).
 
-Si `/data` est illisible, le verrouillage part quand même, mais ne survit pas à
-un redémarrage.
+Un verrouillage cliqué avant que `/data` soit lu (au démarrage) est gardé et
+fusionné avec ce que `/data` contient. Si `/data` est illisible, le verrouillage
+part quand même ; `/data` est relu à chaque tour, et dès qu'il redevient lisible
+le verrouillage y est écrit (ou celui qu'il contenait part aussitôt).
+
+Le statut dit où en est un verrouillage en attente : pas encore parti, en cours
+d'envoi, parti sans confirmation, ou retenu par une clé refusée.
 
 ## Déverrouiller et ouvrir
 
@@ -116,7 +123,9 @@ est refusée, sans rien envoyer, si :
 - une autre commande de déverrouillage ou d'ouverture est en cours ;
 - le numéro de clé ou la clé locale manquent, ou le pont les a refusés ;
 - `/data` est illisible, ou la garde de la commande n'a pas pu y être écrite
-  dans les 3,2 s ;
+  dans les 2 s (et au plus 3,2 s après le clic) ;
+- le pont a demandé une pause (erreur 429 ou 5xx) : le motif dit le temps
+  restant ;
 - un verrouillage est en attente, ou a été demandé pendant la commande ;
 - le pont n'est pas encore identifié, ou un autre pont répond à l'adresse ;
 - la lecture du pont faite après le clic a échoué ou n'est pas venue en 2,5 s ;
@@ -132,10 +141,12 @@ peut bouger) et la serrure est relue.
 
 Le statut de l'écran Configuration dit si le pont répond, si les webhooks sont
 actifs, si un verrouillage attend, si la serrure est hors de portée, et pourquoi
-quelque chose est refusé. Un pont qui répond une erreur 429 ou 5xx met les
-lectures en pause (1 min à 6 h) ; le verrouillage part quand même.
+quelque chose est refusé. Un pont qui répond une erreur 429 ou 5xx met en pause
+(1 min à 6 h) les lectures, le déverrouillage, l'ouverture et les actions ;
+seuls le verrouillage et les lectures qui le confirment passent quand même.
 
-- **Tester la connexion** : lit le pont, inscrit le webhook, et lève un refus de
+- **Tester la connexion** : lit le pont (une fois au plus, et jamais plus souvent
+  que l'intervalle : une lecture plus récente est reprise), inscrit le webhook, et lève un refus de
   la clé locale (un verrouillage en attente part alors en premier). La clé
   locale ne peut être vérifiée que par une vraie commande.
 - **Utiliser le pont qui répond maintenant** : seulement après un remplacement

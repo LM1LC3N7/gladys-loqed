@@ -106,7 +106,10 @@ test('a signed state event is applied at once; unsigned, late, replayed, foreign
   assert.equal(ctx.app.refusedWebhooks, 6);
   assert.equal(last(ctx.gladys, 'state'), 1, 'still locked');
   assert.match(ctx.gladys.fake.connectionStatus.message.en, /Webhooks refused/);
-  // Kept too long by the receiver: ignored (a read tells better).
+  // Kept too long by the receiver (dated after the start): ignored, no read.
+  ctx.bridge.bolt = 'night_lock';
+  await ctx.clock.advance(120_000);
+  const reads = ctx.bridge.count('/status');
   await deliver(
     ctx,
     hook(ctx, open, {
@@ -115,6 +118,7 @@ test('a signed state event is applied at once; unsigned, late, replayed, foreign
     }),
   );
   assert.equal(last(ctx.gladys, 'state'), 1);
+  assert.equal(ctx.bridge.count('/status'), reads, 'not even a read');
   // A notice of the receiver about another sender.
   await deliver(ctx, { type: 'refused', from: '192.168.1.66', at: new Date().toISOString() });
   assert.equal(ctx.app.refusedWebhooks, 7);
@@ -204,6 +208,23 @@ test('a lock still waiting long after its send: an event only triggers a read', 
   assert.ok(ctx.store.data.pendingLock);
   const reads = ctx.bridge.count('/status');
   await deliver(ctx, hook(ctx, { event_type: 'STATE_CHANGED_OPEN', key_local_id: 1 }));
+  await waitFor(() => ctx.bridge.count('/status') > reads);
+  assert.notEqual(last(ctx.gladys, 'position'), 'Open (latch pulled)');
+});
+
+test('m1: a webhook dated before this start (a replay after a restart) only triggers a read', async (t) => {
+  const ctx = await setup(t);
+  const startedSeconds = Math.floor(ctx.app.startedWall / 1000);
+  await ctx.clock.advance(TIMINGS.commandWindow);
+  const reads = ctx.bridge.count('/status');
+  await deliver(
+    ctx,
+    hook(
+      ctx,
+      { event_type: 'STATE_CHANGED_OPEN', key_local_id: 255 },
+      { seconds: startedSeconds - 1 },
+    ),
+  );
   await waitFor(() => ctx.bridge.count('/status') > reads);
   assert.notEqual(last(ctx.gladys, 'position'), 'Open (latch pulled)');
 });

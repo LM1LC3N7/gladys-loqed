@@ -93,8 +93,24 @@ export const T = {
     fr: 'La serrure n’est pas connectée au pont.',
   },
   lockPending: {
-    en: 'A lock is waiting for its confirmation.',
-    fr: 'Un verrouillage attend sa confirmation.',
+    en: 'A lock was sent and waits for the lock to confirm it.',
+    fr: 'Un verrouillage est parti et attend la confirmation de la serrure.',
+  },
+  lockSending: {
+    en: 'A lock is being sent.',
+    fr: 'Un verrouillage est en cours d’envoi.',
+  },
+  lockNotLeft: {
+    en: 'A lock waits: it has not left yet (the bridge does not answer); it is tried every 10 s.',
+    fr: 'Un verrouillage attend : il n’est pas encore parti (le pont ne répond pas) ; il est réessayé toutes les 10 s.',
+  },
+  lockNoConfig: {
+    en: 'A lock waits: it has not left (no bridge address or no valid key); it leaves once they are saved.',
+    fr: 'Un verrouillage attend : il n’est pas parti (pas d’adresse du pont ou pas de clé valide) ; il part dès qu’elles sont enregistrées.',
+  },
+  lockKeyRefused: {
+    en: 'A lock waits: the bridge refused the local key; it leaves with a new key or a successful test.',
+    fr: 'Un verrouillage attend : le pont a refusé la clé locale ; il part avec une nouvelle clé ou un test réussi.',
   },
   lockGivenUp: {
     en: 'Lock sent 3 times without the lock reporting it locked: check the lock.',
@@ -169,6 +185,10 @@ export const C = {
   openOff: {
     en: 'Opening the door from Gladys is off (options "Allow unlocking" and "Allow opening the door").',
     fr: 'L’ouverture de la porte depuis Gladys est désactivée (options « Autoriser le déverrouillage » et « Autoriser l’ouverture de la porte »).',
+  },
+  refusedPaused: {
+    en: 'Refused: the bridge asked to wait (429 / 5xx), {seconds} s left. Nothing sent.',
+    fr: 'Refusé : le pont a demandé d’attendre (429 / 5xx), encore {seconds} s. Rien envoyé.',
   },
   refusedPending: {
     en: 'Refused: a lock is in progress. Nothing sent.',
@@ -263,6 +283,10 @@ export const A = {
   testOk: {
     en: 'Bridge {mac} answers; lock {position}, battery {battery}. Webhooks: {hooks}. The local key is checked by the first command only.',
     fr: 'Le pont {mac} répond ; serrure {position}, batterie {battery}. Webhooks : {hooks}. La clé locale n’est vérifiée que par la première commande.',
+  },
+  testPaused: {
+    en: 'The bridge asked to wait (429 / 5xx): not read for {seconds} s more.',
+    fr: 'Le pont a demandé d’attendre (429 / 5xx) : pas de lecture avant {seconds} s.',
   },
   testFailed: { en: 'The bridge does not answer.', fr: 'Le pont ne répond pas.' },
   testBadAnswer: {

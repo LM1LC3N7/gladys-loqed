@@ -7,7 +7,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { connect } from 'node:net';
+import { connect, createServer as createTcpServer } from 'node:net';
 import { ChannelClient } from '../src/channel.js';
 import { startWebhookService, isHookPath } from '../src/push/service.js';
 import { waitFor, within } from './helpers/clock.js';
@@ -163,4 +163,67 @@ test('the channel refuses a client without the secret', async (t) => {
   await new Promise((resolve) => setTimeout(resolve, 100));
   assert.equal(up, false);
   assert.equal(messages.length, 0);
+});
+
+/** JSON lines of a raw socket. */
+function lines(socket) {
+  const got = [];
+  let rest = '';
+  socket.setEncoding('utf8');
+  socket.on('data', (chunk) => {
+    rest += chunk;
+    let i;
+    while ((i = rest.indexOf('\n')) >= 0) {
+      got.push(JSON.parse(rest.slice(0, i)));
+      rest = rest.slice(i + 1);
+    }
+  });
+  return got;
+}
+
+test('m2: the channel server gives nothing (no ready, no queue) for a wrong proof', async (t) => {
+  const { service, post } = await start(t);
+  assert.equal((await post(`/loqed/${TOKEN}`)).status, 200); // one webhook queued
+  const socket = connect(service.channel.port, '127.0.0.1');
+  socket.on('error', () => {});
+  t.after(() => socket.destroy());
+  const got = lines(socket);
+  await within(
+    waitFor(() => got.length === 1),
+    3000,
+  );
+  assert.equal(got[0].type, 'challenge');
+  socket.write(
+    `${JSON.stringify({ type: 'hello', nonce: 'a'.repeat(32), proof: 'f'.repeat(64) })}\n`,
+  );
+  await within(new Promise((resolve) => socket.once('close', resolve)), 3000, 'closed');
+  assert.equal(got.length, 1, 'neither ready nor the queued webhook');
+});
+
+test('m2: the channel client accepts nothing from a server without the secret', async (t) => {
+  const server = createTcpServer((socket) => {
+    socket.on('error', () => {});
+    socket.write(`${JSON.stringify({ type: 'challenge', nonce: 'b'.repeat(32) })}\n`);
+    socket.on('data', () => {
+      socket.write(`${JSON.stringify({ type: 'ready', proof: 'e'.repeat(64) })}\n`);
+      socket.write(`${JSON.stringify({ type: 'webhook', body: 'e30=' })}\n`);
+    });
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const client = new ChannelClient({
+    host: '127.0.0.1',
+    port: server.address().port,
+    token: CHANNEL,
+    delays: [5000],
+  });
+  const events = [];
+  client.on('up', () => events.push('up'));
+  client.on('message', () => events.push('message'));
+  t.after(async () => {
+    client.stop();
+    await new Promise((resolve) => server.close(resolve));
+  });
+  client.start();
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  assert.deepEqual(events, []);
 });

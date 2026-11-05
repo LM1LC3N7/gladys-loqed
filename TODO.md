@@ -81,7 +81,9 @@ Handoff document: what is done, what was decided, what comes next.
   Decided on a read started after the click (2.5 s at most): same MAC, lock
   online, night lock / day lock / open only; unlock on an unlocked lock sends
   nothing. Guard `{ action, at }` written to /data before the first byte
-  (3.2 s at most, refused otherwise), cleared after. `beforeSend` checks the
+  (2 s at most, and 3.2 s after the click at most; refused otherwise),
+  cleared after. Refused during a pause of the bridge (time left in the
+  reason). `beforeSend` checks the
   option, a lock clicked since (epoch), the key refusal and 3.5 s after the
   click, synchronously before the first byte; the answer is awaited until
   4.6 s. Left without an answer: "sent, without confirmation" (an error ack:
@@ -92,8 +94,18 @@ Handoff document: what is done, what was decided, what comes next.
   read is void when a command left or a lock was clicked while it was out, or
   when a newer read or webhook was applied (reads apply in the order they
   started). 429 / 5xx: pause `Retry-After` (else 60 s doubling) clamped to
-  1 min–6 h, in /data, for the scheduled reads only. Follow-up reads 1.5, 4,
-  8, 15, 30 s after a command.
+  1 min–6 h, in /data, on every path but the lock: scheduled, follow-up and
+  webhook reads, unlock/open (refused), the actions; the reads of a waiting
+  lock still go (review r1, I2). Follow-up reads 1.5, 4, 8, 15, 30 s after a
+  command. "Test the connection": one read at most, never more often than
+  the interval (a newer read is reused).
+- **/data** (review r1, B1/B2): a lock clicked before or while /data is read
+  is merged with what it holds (the latest click wins), written, sent first.
+  /data unreadable (or slow past 2 s) is read again, bounded, at each round
+  (poll, waiting-lock round); once readable, its lock leaves at once.
+- **Replays after a restart** (review r1, m1): the replay cache lives in
+  memory; a webhook dated (bridge time) before the start only triggers a
+  read.
 - **Webhooks**: the main container has no published port: a sub-container of
   the same image (`loqed-webhook`, `start: manual`, read only, 64 MB) serves
   `POST /loqed/<token>` (32+ random characters, compared in constant time),

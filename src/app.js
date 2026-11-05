@@ -139,6 +139,8 @@ export class LoqedApp {
     this.transports = new Map();
     this.discovered = undefined;
     this.configRetry = 0;
+    this.startedWall = Infinity;
+    this.memoryRetry = undefined;
   }
 
   // --- Timers -------------------------------------------------------------------
@@ -213,17 +215,71 @@ export class LoqedApp {
     }
   }
 
+  /**
+   * Reads /data (bounded). A lock clicked before (or while) it is read is
+   * never lost: it is merged with what /data holds (the latest click wins,
+   * its count back to 0), written, and the caller sends it first.
+   */
   async loadMemory() {
     try {
-      const raw = await this.store.load();
-      this.memory = normalizeMemory(raw, this.now());
+      const raw = await bounded(
+        Promise.resolve().then(() => this.store.load()),
+        TIMINGS.storeTimeout,
+        this.timers,
+      );
+      // Read after the load: a click during it counts too.
+      const clicked = this.memory.pendingLock;
+      const loaded = normalizeMemory(raw, this.now());
+      const before = this.memory;
+      this.memory = loaded;
+      // What this session learnt while /data could not be read stays.
+      if (before.keyRefused && !loaded.keyRefused) loaded.keyRefused = before.keyRefused;
+      if (this.memory.pendingLock || clicked) {
+        const latest =
+          clicked && (!loaded.pendingLock || clicked.at >= loaded.pendingLock.at) ? clicked : null;
+        this.memory.pendingLock = latest
+          ? { at: latest.at, sends: latest.sends ?? 0 }
+          : this.memory.pendingLock;
+      }
       this.memoryState = 'ok';
+      if (clicked) this.kickSave();
+      return true;
     } catch (err) {
-      // Unreadable is not empty: no new identity, nothing written over it.
-      this.memory = emptyMemory();
+      // Unreadable is not empty: no new identity, nothing written over it;
+      // a lock clicked meanwhile is kept in memory.
+      if (this.memoryState !== 'unreadable') {
+        this.logger.warn(`/data/loqed.json cannot be read (${err.code ?? err.message})`);
+      }
+      this.memory = {
+        ...emptyMemory(),
+        pendingLock: this.memory.pendingLock,
+        keyRefused: this.memory.keyRefused,
+      };
       this.memoryState = 'unreadable';
-      this.logger.warn(`/data/loqed.json cannot be read (${err.code ?? err.message})`);
+      return false;
     }
+  }
+
+  /**
+   * /data could not be read: read again (bounded, one at a time) at each
+   * round. Once readable, a lock it holds leaves at once, the device is
+   * published, the bridge read.
+   */
+  async retryMemory() {
+    if (this.memoryState !== 'unreadable' || this.memoryRetry || this.stopped) return;
+    const generation = this.generation;
+    this.memoryRetry = this.loadMemory().finally(() => {
+      this.memoryRetry = undefined;
+    });
+    const ok = await this.memoryRetry;
+    if (!ok || generation !== this.generation) return;
+    this.logger.info('/data/loqed.json is readable again');
+    if (this.memory.pendingLock) {
+      this.armPendingTick(TIMINGS.lockPendingRead);
+      this.sendLock({ clicked: false }).catch(() => {});
+    }
+    await this.publishDiscovery();
+    await this.updateStatus();
   }
 
   /** Writes /data (bounded); never awaited on the lock path. Rejects on failure. */
@@ -249,6 +305,8 @@ export class LoqedApp {
     this.started = true;
     const generation = this.generation;
     this.config = normalizeConfig(raw);
+    // Seconds: the bridge dates its webhooks to the second.
+    this.startedWall = Math.floor(this.now() / 1000) * 1000;
     if (this.memoryState !== 'ok') {
       await this.loadMemory();
       if (generation !== this.generation) return;
@@ -384,7 +442,27 @@ export class LoqedApp {
     this.lastStatus = key;
   }
 
+  /** Where a waiting lock stands, exactly; undefined when none waits. */
+  lockNote() {
+    if (!this.memory.pendingLock) return undefined;
+    if (this.memory.keyRefused) return T.lockKeyRefused;
+    const result = this.lastLock?.result;
+    if (result === 'noConfig' || this.config.commandProblem || this.config.problem) {
+      return T.lockNoConfig;
+    }
+    if (result === undefined || result === 'notSent') return T.lockNotLeft;
+    if (result === 'sending') return T.lockSending;
+    return T.lockPending;
+  }
+
   statusEntry() {
+    const [connected, entry] = this.baseStatus();
+    const note = this.lockNote();
+    if (!note || connected) return [connected, entry];
+    return [connected, { en: `${entry.en} ${note.en}`, fr: `${entry.fr} ${note.fr}` }];
+  }
+
+  baseStatus() {
     const c = this.config;
     if (c.problem) return [false, T[c.problem]];
     if (this.memoryState === 'unreadable') return [false, T.dataUnreadable];
@@ -396,7 +474,8 @@ export class LoqedApp {
       return [false, this.failures > 0 ? T.unreachable : T.connecting];
     }
     const notes = [];
-    if (this.memory.pendingLock) notes.push(T.lockPending);
+    const lock = this.lockNote();
+    if (lock) notes.push(lock);
     if (this.observed.online === false) notes.push(T.lockOffline);
     if (c.commandProblem) notes.push(T[c.commandProblem]);
     if (c.hookProblem) notes.push(T[c.hookProblem]);
@@ -531,6 +610,8 @@ export class LoqedApp {
   async poll() {
     if (this.stopped) return;
     const interval = this.config.pollInterval * 1000;
+    await this.retryMemory();
+    if (this.stopped) return;
     try {
       if (!this.paused()) {
         await this.read();
@@ -553,6 +634,8 @@ export class LoqedApp {
 
   /** One read at a time; a read asked during one runs right after it. */
   read() {
+    // A pause asked by the bridge holds every read but those of a waiting lock.
+    if (this.paused() && !this.memory.pendingLock) return Promise.resolve();
     if (this.readChain) {
       this.readAgain = true;
       return this.readChain;
@@ -778,6 +861,7 @@ export class LoqedApp {
   /** While a lock waits: read (which sends it again if needed), or send it if it never left. */
   armPendingTick(ms) {
     this.later('pending', ms, async () => {
+      await this.retryMemory();
       if (!this.memory.pendingLock) return;
       this.armPendingTick(TIMINGS.lockPendingRead);
       const last = this.lastLock?.result;
@@ -928,6 +1012,8 @@ export class LoqedApp {
     if (c.problem || c.commandProblem) throw refuse(C.refusedNoCommand);
     if (this.memoryState !== 'ok') throw refuse(C.refusedData);
     if (this.memory.keyRefused) throw refuse(C.refusedKey);
+    const paused = this.pauseMessage(C.refusedPaused);
+    if (paused) throw refuse(paused);
     if (this.memory.pendingLock || this.lockSending) throw refuse(C.refusedPending);
     if (!this.trustedMac() || mac !== this.trustedMac()) throw refuse(C.refusedIdentity);
     const epoch = this.lockEpoch;
@@ -1230,6 +1316,12 @@ export class LoqedApp {
     const mac = this.trustedMac();
     if (event.mac && mac && event.mac !== mac) return this.noteRefusedWebhook('bridge');
     this.lastWebhookMono = mono;
+    // Dated before this start: the replay cache did not exist then (a webhook
+    // captured and sent again after a restart). Only a read decides.
+    if (verified.seconds * 1000 < this.startedWall) {
+      await this.read();
+      return undefined;
+    }
     await this.applyEvent(event, { at, seconds: verified.seconds, mono });
     return undefined;
   }
@@ -1307,21 +1399,49 @@ export class LoqedApp {
 
   // --- Actions --------------------------------------------------------------------------
 
+  /** The pause asked by the bridge, as a message with the time left; undefined when none. */
+  pauseMessage(entry) {
+    const left = this.pauseUntilMono - this.monotonic();
+    if (!(left > 0)) return undefined;
+    return message(entry, { seconds: Math.ceil(left / 1000) });
+  }
+
+  /**
+   * "Test the connection": never a read faster than the interval (a read
+   * younger than it is used as is), never during a pause; one read at most.
+   */
   async testConnection() {
     const language = this.config.language;
     const mono = this.monotonic();
-    if (mono - this.lastTest < TIMINGS.testCooldown) return word(A.testWait, language);
-    this.lastTest = mono;
-    if (this.config.problem) return word(A.testNoConfig, language);
-    const status = await this.readStatusOnly();
-    if (!status.ok) {
-      return word(
-        status.kind === ERROR_KINDS.BAD_RESPONSE ? A.testBadAnswer : A.testFailed,
-        language,
-      );
+    const interval = this.config.pollInterval * 1000;
+    if (mono - this.lastTest < Math.max(TIMINGS.testCooldown, interval)) {
+      return word(A.testWait, language);
     }
-    if (this.memory.mac && status.status.mac !== this.memory.mac) {
-      return message(A.testOther, { mac: status.status.mac })[language];
+    if (this.config.problem) return word(A.testNoConfig, language);
+    const paused = this.pauseMessage(A.testPaused);
+    if (paused) return paused[language];
+    this.lastTest = mono;
+    let status;
+    const fresh =
+      this.failures === 0 &&
+      this.observed.at > 0 &&
+      this.memory.mac &&
+      this.now() - this.memory.lastTry < interval;
+    if (fresh || this.memory.otherMac) {
+      status = this.memory.otherMac
+        ? { mac: this.memory.otherMac }
+        : { mac: this.memory.mac, ...this.observed };
+    } else {
+      status = await this.readOnce();
+      if (!status) {
+        return word(
+          this.lastError === ERROR_KINDS.BAD_RESPONSE ? A.testBadAnswer : A.testFailed,
+          language,
+        );
+      }
+    }
+    if (this.memory.mac && status.mac !== this.memory.mac) {
+      return message(A.testOther, { mac: status.mac })[language];
     }
     // A successful test lifts the refusal of the key: a waiting lock leaves first.
     if (this.memory.keyRefused) {
@@ -1329,26 +1449,23 @@ export class LoqedApp {
       if (this.memoryState === 'ok') this.kickSave();
       if (this.memory.pendingLock) await this.sendLock({ clicked: false });
     }
-    await this.read();
     if (this.config.hookProblem) {
       this.hookState = 'off';
     } else {
       await this.ensureReceiver().catch(() => {});
     }
+    await this.updateStatus();
     const hooks = {
       ok: A.hooksOk,
       refused: A.hooksRefused,
       failed: A.hooksFailed,
       off: A.hooksOff,
     }[this.hookState];
-    const position = status.status.position;
+    const position = status.position;
     return message(A.testOk, {
-      mac: status.status.mac,
+      mac: status.mac,
       position: position ? word(POSITION_TEXT[position], language) : word(A.unknown, language),
-      battery:
-        status.status.battery === undefined
-          ? word(A.unknown, language)
-          : `${status.status.battery} %`,
+      battery: status.battery === undefined ? word(A.unknown, language) : `${status.battery} %`,
       hooks: word(hooks, language),
     })[language];
   }
@@ -1378,6 +1495,8 @@ export class LoqedApp {
     const language = this.config.language;
     if (this.config.problem) return word(A.testNoConfig, language);
     if (this.memoryState !== 'ok') return word(A.adoptData, language);
+    const paused = this.pauseMessage(A.testPaused);
+    if (paused) return paused[language];
     const read = await this.readStatusOnly();
     if (!read.ok) return word(A.adoptFailed, language);
     const mac = read.status.mac;

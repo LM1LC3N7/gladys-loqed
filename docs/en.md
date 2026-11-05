@@ -58,7 +58,8 @@ signed with the bridge key. Each webhook received is checked before it counts:
 - the exact address (with a random token) and the POST method;
 - the signature of the bridge (`HASH`, made with the bridge key);
 - the bridge time within 30 s of the receiver time; a webhook kept more than
-  60 s in the receiver is ignored; a replayed webhook is refused;
+  60 s in the receiver is ignored; a replayed webhook is refused; a webhook
+  dated before the last start of the integration only triggers a read;
 - the address of the sender, equal to the bridge's (option "Accept webhooks
   only from the address of the bridge", on by default);
 - the MAC address of the bridge when the webhook gives it.
@@ -97,8 +98,13 @@ Locking waits, without leaving, in these cases only:
   longer leaves by itself until another key is saved or "Test the connection"
   succeeds (it then leaves first).
 
-If `/data` cannot be read, locking still leaves, but does not survive a
-restart.
+A lock clicked before `/data` is read (at the start) is kept and merged with
+what `/data` holds. If `/data` cannot be read, locking still leaves; `/data` is
+read again at each round, and once readable the lock is written there (or the
+one it held leaves at once).
+
+The status says where a waiting lock stands: not left yet, being sent, sent
+without confirmation, or held by a refused key.
 
 ## Unlocking and opening
 
@@ -110,7 +116,9 @@ command at a time. Each one is refused, with nothing sent, when:
 - another unlock or open is in progress;
 - the key id or the local key is missing, or the bridge refused them;
 - `/data` cannot be read, or the guard of the command could not be written
-  there within 3.2 s;
+  there within 2 s (and 3.2 s after the click at most);
+- the bridge asked for a pause (429 or 5xx error): the reason gives the time
+  left;
 - a lock is waiting, or was asked during the command;
 - the bridge is not identified yet, or another bridge answers at the address;
 - the read of the bridge made after the click failed or did not come within
@@ -128,9 +136,11 @@ move) and the lock is read again.
 The status of the Configuration screen says whether the bridge answers, whether
 the webhooks are on, whether a lock is waiting, whether the lock is out of
 reach, and why something is refused. A bridge answering a 429 or 5xx error
-pauses the reads (1 min to 6 h); locking still leaves.
+pauses (1 min to 6 h) the reads, unlocking, opening and the actions; only
+locking and the reads that confirm it still go.
 
-- **Test the connection**: reads the bridge, registers the webhook, and lifts a
+- **Test the connection**: reads the bridge (once at most, never more often than
+  the interval: a newer read is used), registers the webhook, and lifts a
   refusal of the local key (a waiting lock then leaves first). The local key
   can only be checked by a real command.
 - **Use the bridge now answering**: only after replacing the bridge. Press
