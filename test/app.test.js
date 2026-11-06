@@ -115,19 +115,18 @@ test('lock: answered errors are not tries (never given up); 2xx unconfirmed: 3 s
   const ctx = await setup(t, { bridge: { commandMode: 500 } });
   await press(ctx, 'lock');
   for (let i = 0; i < 12; i += 1) {
-    await ctx.clock.advance(TIMINGS.lockPendingRead);
-    await settle(20);
+    await ctx.advance(TIMINGS.lockPendingRead);
   }
   assert.ok(commands(ctx, 'lock').length >= 4, 'sent again and again');
+  assert.ok(ctx.lockAnswers.every((a) => a === 500));
   assert.equal(ctx.store.data.pendingLock.sends, 0);
   ctx.bridge.commandMode = 'ok';
   ctx.bridge.ignore = true;
   for (let i = 0; i < 12 && ctx.store.data.pendingLock; i += 1) {
-    await ctx.clock.advance(TIMINGS.lockPendingRead);
-    await settle(20);
+    await ctx.advance(TIMINGS.lockPendingRead);
   }
   assert.equal(ctx.store.data.pendingLock, null);
-  assert.equal(commands(ctx, 'lock').filter((c) => c.valid).length >= 3, true);
+  assert.equal(ctx.lockAnswers.filter((a) => a === '2xx').length, 3);
   assert.match(last(ctx.gladys, 'last_command'), /3 times/);
 });
 
@@ -283,11 +282,10 @@ test('a read equal to the state before is not a confirmation (slow motor)', asyn
 test('lock with a slow motor: not sent again before 6 s, confirmed by a later read', async (t) => {
   const ctx = await setup(t, { bridge: { motorMs: 150 } });
   await press(ctx, 'lock');
-  await ctx.clock.advance(TIMINGS.followUps[1]);
-  await settle(20);
+  await ctx.advance(TIMINGS.followUps[1]);
   assert.equal(commands(ctx).length, 1, 'not again within 6 s of the send');
   await new Promise((resolve) => setTimeout(resolve, 200));
-  await ctx.clock.advance(TIMINGS.followUps[2] - TIMINGS.followUps[1]);
+  await ctx.advance(TIMINGS.followUps[2] - TIMINGS.followUps[1]);
   await waitFor(() => ctx.store.data.pendingLock === null);
   assert.equal(commands(ctx).length, 1);
 });
@@ -863,15 +861,17 @@ test('I1: exactly 3 sends answered 2xx, never given up after 1 or 2', async (t) 
   await press(ctx, 'lock');
   const seen = [];
   for (let i = 0; i < 12 && ctx.store.data.pendingLock; i += 1) {
-    await ctx.clock.advance(TIMINGS.lockPendingRead);
-    await settle(20);
-    seen.push([commands(ctx, 'lock').length, Boolean(ctx.store.data.pendingLock)]);
+    await ctx.advance(TIMINGS.lockPendingRead);
+    const answered = ctx.lockAnswers.filter((a) => a === '2xx').length;
+    seen.push([answered, Boolean(ctx.store.data.pendingLock)]);
   }
-  assert.equal(commands(ctx, 'lock').length, 3, JSON.stringify(seen));
-  for (const [sent, waiting] of seen) {
-    if (sent < 3) assert.equal(waiting, true, `given up after ${sent}`);
+  const answered = ctx.lockAnswers.filter((a) => a === '2xx').length;
+  assert.equal(answered, 3, JSON.stringify({ seen, answers: ctx.lockAnswers }));
+  for (const [count, waiting] of seen) {
+    if (count < 3) assert.equal(waiting, true, `given up after ${count}`);
   }
   assert.equal(ctx.store.data.pendingLock, null);
+  assert.equal(commands(ctx, 'lock').length, 3, 'every send reached the bridge answered');
 });
 
 test('I2: a pause holds follow-up reads, webhook reads and the test button; a waiting lock still reads', async (t) => {
@@ -1106,4 +1106,29 @@ test('r2 m1: the status follows the lock result (sent without answer) without an
     /was sent and waits/.test(ctx.gladys.fake.connectionStatus.message?.en ?? ''),
   );
   assert.equal(ctx.bridge.count('/status'), reads);
+});
+
+test('r3 m1: on a stuck /data the app never starts a second load beside the first', async (t) => {
+  const store = memoryStore({ mac: MAC });
+  let loads = 0;
+  const load = store.load.bind(store);
+  store.load = () => {
+    loads += 1;
+    return load();
+  };
+  store.hang = true;
+  const ctx = await setup(t, {
+    start: false,
+    created: false,
+    store,
+    config: { poll_interval: 600 },
+  });
+  const connecting = ctx.gladys.connect();
+  await settle(10);
+  await ctx.clock.advance(TIMINGS.storeTimeout);
+  await connecting;
+  for (let i = 0; i < 4; i += 1)
+    await ctx.clock.advance(TIMINGS.memoryRetry + TIMINGS.storeTimeout);
+  assert.equal(ctx.app.memoryState, 'unreadable');
+  assert.equal(loads, 1, 'the stuck load is awaited again, never doubled');
 });

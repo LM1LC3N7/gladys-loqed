@@ -106,7 +106,9 @@ Handoff document: what is done, what was decided, what comes next.
   readable, its lock leaves at once and the 10 s round is armed. The round
   of a waiting lock never waits for /data (r2, m3). The status is sent again
   at every result of a lock (r2, m1). The test button tells the time left;
-  only a test that read holds the next one for the interval (r2, m2).
+  only a test that read holds the next one for the interval (r2, m2). A
+  stuck read of /data is never doubled: the next try awaits the same one,
+  in the app and in the file store (r3, m1).
 - **Replays after a restart** (review r1, m1): the replay cache lives in
   memory; a webhook dated (bridge time) before the start only triggers a
   read.

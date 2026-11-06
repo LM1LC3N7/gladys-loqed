@@ -100,7 +100,35 @@ export async function setup(
     app.stop();
     await bridge.close();
   });
-  const ctx = { app, gladys, bridge, store: theStore, clock, channel, logs };
+  // Requests in flight and the answers of the locks, for the counting tests.
+  let inflight = 0;
+  const lockAnswers = [];
+  const request = app.request;
+  app.request = (options) => {
+    inflight += 1;
+    const pending = request(options);
+    const isLock = String(options.path).startsWith('/to_lock');
+    pending.then(
+      () => isLock && lockAnswers.push('2xx'),
+      (err) => isLock && lockAnswers.push(err.notSent ? 'notSent' : (err.status ?? err.kind)),
+    );
+    return pending.finally(() => {
+      inflight -= 1;
+    });
+  };
+  const quiet = () => waitFor(() => inflight === 0, { what: 'requests in flight' });
+  const ctx = {
+    app,
+    gladys,
+    bridge,
+    store: theStore,
+    clock,
+    channel,
+    logs,
+    lockAnswers,
+    /** Advances the virtual time only while no request is in flight (no race with real I/O). */
+    advance: (ms) => clock.advance(ms, { beforeFire: quiet }),
+  };
   if (start) {
     await within(gladys.connect(), 3000, 'connect');
     await clock.advance(0);

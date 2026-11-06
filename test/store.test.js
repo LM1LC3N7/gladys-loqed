@@ -154,3 +154,21 @@ test('config: addresses (IP only, never broadcast nor multicast), keys, options 
   assert.equal(normalizeConfig({}).problem, 'noAddress');
   assert.equal(normalizeConfig({ allow_unlock: true }).allowUnlock, true);
 });
+
+test('r3 m1: a stuck read of /data is never doubled: the next load awaits the same one', async () => {
+  let reads = 0;
+  let finish;
+  const store = fileStore('/nowhere/loqed.json', {
+    read: () => {
+      reads += 1;
+      return reads === 1 ? new Promise((resolve) => (finish = resolve)) : Promise.resolve(null);
+    },
+  });
+  await assert.rejects(within(store.load(), 3000), /Timed out/);
+  await assert.rejects(within(store.load(), 3000), /Timed out/);
+  assert.equal(reads, 1, 'one read under way at most');
+  finish(null);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(await store.load(), null);
+  assert.equal(reads, 2, 'a new read once the stuck one settled');
+});

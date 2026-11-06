@@ -142,6 +142,7 @@ export class LoqedApp {
     this.configRetry = 0;
     this.startedWall = Infinity;
     this.memoryRetry = undefined;
+    this.rawLoad = undefined;
   }
 
   // --- Timers -------------------------------------------------------------------
@@ -223,11 +224,16 @@ export class LoqedApp {
    */
   async loadMemory() {
     try {
-      const raw = await bounded(
-        Promise.resolve().then(() => this.store.load()),
-        TIMINGS.storeTimeout,
-        this.timers,
-      );
+      // One load of the store at a time: a stuck one is awaited again, never doubled.
+      if (!this.rawLoad) {
+        const load = Promise.resolve().then(() => this.store.load());
+        this.rawLoad = load;
+        load.then(
+          () => (this.rawLoad = undefined),
+          () => (this.rawLoad = undefined),
+        );
+      }
+      const raw = await bounded(this.rawLoad, TIMINGS.storeTimeout, this.timers);
       // Read after the load: a click during it counts too.
       const clicked = this.memory.pendingLock;
       const loaded = normalizeMemory(raw, this.now());

@@ -73,9 +73,15 @@ export function testClock({ start = Date.UTC(2026, 10, 5, 12), step = 0.001, ioM
     shiftWall(ms) {
       start += ms;
     },
-    async advance(ms) {
+    /**
+     * `beforeFire`: awaited before each timer fires and at the end (e.g. "no
+     * request in flight"), so real I/O never races the virtual time.
+     */
+    async advance(ms, { beforeFire } = {}) {
       const target = t + ms;
       for (let guard = 0; guard < 100_000; guard += 1) {
+        // The I/O settles first: it may arm or clear timers.
+        if (beforeFire) await beforeFire();
         let next;
         for (const [h, timer] of pending) {
           if (

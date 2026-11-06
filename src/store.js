@@ -112,8 +112,11 @@ async function writeRegular(path, text) {
  * exists but cannot be read) and `save(data)` (resolves once THIS data, or a
  * later one, is on disk; rejects on failure). Both bounded in time.
  */
-export function fileStore(path = STATE_FILE, { timers = globalThis } = {}) {
+export function fileStore(path = STATE_FILE, { timers = globalThis, read = readRegular } = {}) {
   let writing;
+  // The read under way, kept until it settles: on a stuck volume a new read
+  // never starts beside it (each would hold a libuv thread).
+  let reading;
   let waiting;
   const run = () => {
     const job = waiting;
@@ -129,7 +132,14 @@ export function fileStore(path = STATE_FILE, { timers = globalThis } = {}) {
   };
   return {
     load() {
-      return bounded(readRegular(path), TIMINGS.storeTimeout, timers);
+      if (!reading) {
+        reading = read(path);
+        reading.then(
+          () => (reading = undefined),
+          () => (reading = undefined),
+        );
+      }
+      return bounded(reading, TIMINGS.storeTimeout, timers);
     },
     save(data) {
       const text = JSON.stringify(data);
@@ -149,24 +159,39 @@ export function fileStore(path = STATE_FILE, { timers = globalThis } = {}) {
 
 /**
  * For the tests: the same JSON round trip as the file. `failing` refuses
- * every save, `unreadable` every load, `hang` never settles (a stuck /data).
+ * every save, `unreadable` every load; `hang` holds every call until it is
+ * cleared (a stuck, then slow /data).
  */
 export function memoryStore(initial = null, { failing = false, unreadable = false } = {}) {
+  let hang = false;
+  let waiters = [];
+  /** While `hang`, a call waits; clearing `hang` lets the waiting calls go on (a slow /data). */
+  const gate = () => (hang ? new Promise((resolve) => waiters.push(resolve)) : Promise.resolve());
   return {
     data: initial === null ? null : JSON.parse(JSON.stringify(initial)),
     saves: 0,
     failing,
     unreadable,
-    hang: false,
+    get hang() {
+      return hang;
+    },
+    set hang(value) {
+      hang = Boolean(value);
+      if (!hang) {
+        const go = waiters;
+        waiters = [];
+        go.forEach((resolve) => resolve());
+      }
+    },
     async load() {
-      if (this.hang) return new Promise(() => {});
+      await gate();
       if (this.unreadable) {
         throw Object.assign(new Error('EACCES'), { code: 'EACCES' });
       }
       return this.data === null ? null : JSON.parse(JSON.stringify(this.data));
     },
     async save(data) {
-      if (this.hang) return new Promise(() => {});
+      await gate();
       if (this.failing) {
         throw new Error('EROFS');
       }
