@@ -936,3 +936,174 @@ test('m6: the test button never reads faster than the interval', async (t) => {
   assert.equal(answer.success, true);
   assert.ok(ctx.bridge.count('/status') <= before + 1, 'one read at most');
 });
+
+test('r2 I1: /data unreadable at the start is read again every 10 s, whatever the interval', async (t) => {
+  const store = memoryStore({ mac: MAC, pendingLock: { at: Date.UTC(2026, 10, 5, 11), sends: 0 } });
+  store.hang = true;
+  const ctx = await setup(t, {
+    start: false,
+    created: false,
+    store,
+    config: { poll_interval: 600 },
+  });
+  const connecting = ctx.gladys.connect();
+  await settle(10);
+  await ctx.clock.advance(TIMINGS.storeTimeout);
+  await connecting;
+  // The first scheduled read (and its /data retry) passes while /data still hangs.
+  await ctx.clock.advance(TIMINGS.storeTimeout + 100);
+  assert.equal(ctx.app.memoryState, 'unreadable');
+  store.hang = false;
+  await ctx.clock.advance(TIMINGS.memoryRetry);
+  await waitFor(() => commands(ctx, 'lock').length === 1, { what: 'the kept lock within 10 s' });
+});
+
+test('r2 I2: a lock clicked while getConfig() fails, then /data unreadable, still leaves', async (t) => {
+  const store = memoryStore({ mac: MAC });
+  const ctx = await setup(t, { start: false, created: false, store });
+  let calls = 0;
+  const real = ctx.gladys.getConfig.bind(ctx.gladys);
+  ctx.gladys.getConfig = async () => {
+    calls += 1;
+    if (calls === 2) throw new Error('boom');
+    return real();
+  };
+  const connecting = ctx.gladys.connect();
+  await waitFor(() => calls === 2);
+  await settle(10);
+  await press(ctx, 'lock');
+  store.unreadable = true;
+  await ctx.clock.advance(TIMINGS.configRetry[0]);
+  await connecting;
+  assert.equal(ctx.app.memoryState, 'unreadable');
+  await waitFor(() => commands(ctx, 'lock').length === 1, { what: 'the lock clicked before' });
+});
+
+test('r2 I2: /data readable again with the bridge away: its lock leaves when the bridge is back', async (t) => {
+  const store = memoryStore({ mac: MAC, pendingLock: { at: Date.UTC(2026, 10, 5, 11), sends: 0 } });
+  store.unreadable = true;
+  const ctx = await setup(t, {
+    start: false,
+    created: false,
+    store,
+    config: { poll_interval: 600 },
+  });
+  await ctx.bridge.unplug();
+  await ctx.gladys.connect();
+  await settle(10);
+  store.unreadable = false;
+  await ctx.clock.advance(TIMINGS.memoryRetry);
+  for (let i = 0; i < 10; i += 1) await ctx.clock.advance(TIMINGS.lockRetryGap);
+  await waitFor(() => ctx.app.memoryState === 'ok');
+  assert.equal(commands(ctx, 'lock').length, 0);
+  await ctx.bridge.plug();
+  await ctx.clock.advance(TIMINGS.lockPendingRead);
+  await waitFor(() => commands(ctx, 'lock').length === 1, { what: 'sent by the 10 s round' });
+});
+
+test('r2 m1: the status tells at once that a lock has not left, without any read', async (t) => {
+  const ctx = await setup(t, { config: { poll_interval: 600 } });
+  await ctx.bridge.unplug();
+  const reads = ctx.bridge.count('/status');
+  const pressed = press(ctx, 'lock');
+  for (let i = 0; i < 10; i += 1) await ctx.clock.advance(TIMINGS.lockRetryGap);
+  await pressed;
+  await waitFor(() => /has not left yet/.test(ctx.gladys.fake.connectionStatus.message?.en ?? ''));
+  assert.equal(ctx.bridge.count('/status'), reads);
+});
+
+test('r2 m3: the waiting round sends a lock that never left without waiting for a stuck /data', async (t) => {
+  const ctx = await setup(t);
+  await ctx.bridge.unplug();
+  const pressed = press(ctx, 'lock');
+  for (let i = 0; i < 10; i += 1) await ctx.clock.advance(TIMINGS.lockRetryGap);
+  await pressed;
+  ctx.store.hang = true;
+  ctx.app.memoryState = 'unreadable';
+  await ctx.bridge.plug();
+  await ctx.clock.advance(TIMINGS.lockPendingRead);
+  await waitFor(() => commands(ctx, 'lock').length === 1, { what: 'sent, /data stuck' });
+});
+
+test('r2 m4: adopting is held by a pause', async (t) => {
+  const ctx = await setup(t);
+  ctx.bridge.statusMode = 429;
+  await ctx.clock.advance(30_000);
+  await waitFor(() => ctx.app.failures === 1);
+  ctx.bridge.statusMode = 'ok';
+  const reads = ctx.bridge.count('/status');
+  const answer = await ctx.gladys.fake.action('adopt_bridge', {});
+  assert.match(answer.data.message, /asked to wait/);
+  assert.equal(ctx.bridge.count('/status'), reads);
+});
+
+test('r2 m4: a key refusal learnt while /data was unreadable survives its reading', async (t) => {
+  const store = memoryStore({ mac: MAC });
+  store.unreadable = true;
+  const ctx = await setup(t, {
+    start: false,
+    created: false,
+    store,
+    bridge: { localKey: 'AAAAAAAAAAAAAAAAAAAAAA==' },
+  });
+  await ctx.gladys.connect();
+  await settle(10);
+  await press(ctx, 'lock');
+  assert.ok(ctx.app.memory.keyRefused);
+  store.unreadable = false;
+  await ctx.clock.advance(TIMINGS.memoryRetry);
+  await waitFor(() => ctx.app.memoryState === 'ok');
+  assert.ok(ctx.app.memory.keyRefused, 'still refused');
+  assert.ok(store.data.keyRefused, 'written');
+  await ctx.clock.advance(TIMINGS.lockPendingRead);
+  assert.equal(commands(ctx, 'lock').length, 1, 'no automatic send');
+});
+
+test('r2 m4: a click during the reading of /data wins over an older lock of /data (count back to 0)', async (t) => {
+  const base = memoryStore({ mac: MAC, pendingLock: { at: Date.UTC(2026, 10, 5, 11), sends: 2 } });
+  let release;
+  const store = {
+    load() {
+      if (!release) return new Promise((resolve) => (release = () => resolve(base.load())));
+      return base.load();
+    },
+    save: (data) => base.save(data),
+  };
+  const ctx = await setup(t, { start: false, created: false, store });
+  await ctx.bridge.unplug();
+  const connecting = ctx.gladys.connect();
+  await waitFor(() => release);
+  const pressed = press(ctx, 'lock');
+  for (let i = 0; i < 10; i += 1) await ctx.clock.advance(TIMINGS.lockRetryGap);
+  await pressed;
+  release();
+  await connecting;
+  await waitFor(() => base.data.pendingLock?.sends === 0, { what: 'the click wins' });
+});
+
+test('r2 m2: a test that could not read does not hold the next one for the interval', async (t) => {
+  const ctx = await setup(t, { config: { poll_interval: 600 } });
+  await ctx.bridge.unplug();
+  await ctx.app.read();
+  let answer = await ctx.gladys.fake.action('test_connection', {});
+  assert.match(answer.data.message, /does not answer/);
+  await ctx.bridge.plug();
+  answer = await ctx.gladys.fake.action('test_connection', {});
+  assert.match(answer.data.message, /try again in \d+ s/);
+  await ctx.clock.advance(TIMINGS.testCooldown);
+  answer = await ctx.gladys.fake.action('test_connection', {});
+  assert.match(answer.data.message, /answers/);
+});
+
+test('r2 m1: the status follows the lock result (sent without answer) without any read', async (t) => {
+  const ctx = await setup(t, { config: { poll_interval: 600 }, bridge: { commandMode: 'silent' } });
+  const pressed = press(ctx, 'lock');
+  await waitFor(() => commands(ctx).length === 1);
+  const reads = ctx.bridge.count('/status');
+  await ctx.clock.advance(TIMINGS.commandTimeout);
+  await pressed;
+  await waitFor(() =>
+    /was sent and waits/.test(ctx.gladys.fake.connectionStatus.message?.en ?? ''),
+  );
+  assert.equal(ctx.bridge.count('/status'), reads);
+});

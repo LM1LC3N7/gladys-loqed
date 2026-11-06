@@ -134,6 +134,7 @@ export class LoqedApp {
     this.refusedWebhooks = 0;
     this.lastRefusedStatus = -Infinity;
     this.lastTest = -Infinity;
+    this.lastTestTry = -Infinity;
     this.adopt = undefined;
     this.lastStatus = undefined;
     this.transports = new Map();
@@ -256,13 +257,15 @@ export class LoqedApp {
         keyRefused: this.memory.keyRefused,
       };
       this.memoryState = 'unreadable';
+      // Read again on a timer of its own (not the interval, up to 10 min).
+      this.later('memory', TIMINGS.memoryRetry, () => this.retryMemory());
       return false;
     }
   }
 
   /**
-   * /data could not be read: read again (bounded, one at a time) at each
-   * round. Once readable, a lock it holds leaves at once, the device is
+   * /data could not be read: read again (bounded, one at a time) every
+   * 10 s and at each scheduled read. Once readable, a lock it holds leaves at once, the device is
    * published, the bridge read.
    */
   async retryMemory() {
@@ -843,6 +846,7 @@ export class LoqedApp {
     this.memory.pendingLock = { at: this.now(), sends: 0 };
     this.armPendingTick(TIMINGS.lockPendingRead);
     if (this.memoryState === 'ok') this.kickSave();
+    this.updateStatus().catch(() => {});
     const result = await this.sendLock({ clicked: true });
     const entry = {
       sent: C.lockSent,
@@ -860,8 +864,8 @@ export class LoqedApp {
 
   /** While a lock waits: read (which sends it again if needed), or send it if it never left. */
   armPendingTick(ms) {
+    // Never waits for /data: the lock goes first (/data has its own timer).
     this.later('pending', ms, async () => {
-      await this.retryMemory();
       if (!this.memory.pendingLock) return;
       this.armPendingTick(TIMINGS.lockPendingRead);
       const last = this.lastLock?.result;
@@ -898,6 +902,8 @@ export class LoqedApp {
     const c = this.config;
     const done = (result) => {
       this.lastLock = { ...(this.lastLock ?? {}), result };
+      // The status says where the lock stands, whatever the result.
+      this.updateStatus().catch(() => {});
       return result;
     };
     if (!this.memory.pendingLock) return 'sent';
@@ -1414,13 +1420,18 @@ export class LoqedApp {
     const language = this.config.language;
     const mono = this.monotonic();
     const interval = this.config.pollInterval * 1000;
-    if (mono - this.lastTest < Math.max(TIMINGS.testCooldown, interval)) {
-      return word(A.testWait, language);
-    }
     if (this.config.problem) return word(A.testNoConfig, language);
     const paused = this.pauseMessage(A.testPaused);
     if (paused) return paused[language];
-    this.lastTest = mono;
+    // Never faster than the interval after a test that read; 10 s after one that failed.
+    const wait = Math.max(
+      this.lastTest + Math.max(TIMINGS.testCooldown, interval),
+      this.lastTestTry + TIMINGS.testCooldown,
+    );
+    if (mono < wait) {
+      return message(A.testWait, { seconds: Math.ceil((wait - mono) / 1000) })[language];
+    }
+    this.lastTestTry = mono;
     let status;
     const fresh =
       this.failures === 0 &&
@@ -1428,11 +1439,13 @@ export class LoqedApp {
       this.memory.mac &&
       this.now() - this.memory.lastTry < interval;
     if (fresh || this.memory.otherMac) {
+      this.lastTest = mono;
       status = this.memory.otherMac
         ? { mac: this.memory.otherMac }
         : { mac: this.memory.mac, ...this.observed };
     } else {
       status = await this.readOnce();
+      if (status) this.lastTest = mono;
       if (!status) {
         return word(
           this.lastError === ERROR_KINDS.BAD_RESPONSE ? A.testBadAnswer : A.testFailed,

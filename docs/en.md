@@ -100,7 +100,7 @@ Locking waits, without leaving, in these cases only:
 
 A lock clicked before `/data` is read (at the start) is kept and merged with
 what `/data` holds. If `/data` cannot be read, locking still leaves; `/data` is
-read again at each round, and once readable the lock is written there (or the
+read again every 10 s, and once readable the lock is written there (or the
 one it held leaves at once).
 
 The status says where a waiting lock stands: not left yet, being sent, sent

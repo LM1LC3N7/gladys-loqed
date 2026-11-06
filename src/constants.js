@@ -122,6 +122,8 @@ export const TIMINGS = {
   commandReadBy: 2_500,
   /** The guard of a sensitive command must be in /data by this time after the click. */
   commandSaveBy: 3_200,
+  /** /data unreadable: read again this often, whatever the interval. */
+  memoryRetry: 10 * SECOND,
   /** /data reads and writes awaited at most this long. */
   storeTimeout: 2 * SECOND,
   /** Webhooks: the bridge timestamp within this much of the receiver clock (loqedAPI: 10 s). */

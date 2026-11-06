@@ -273,8 +273,8 @@ export const C = {
 /** Answers of the configuration actions. */
 export const A = {
   testWait: {
-    en: 'Tested a moment ago: try again in a few seconds.',
-    fr: 'Testé il y a un instant : réessayez dans quelques secondes.',
+    en: 'Tested a moment ago (never faster than the refresh interval): try again in {seconds} s.',
+    fr: 'Testé il y a peu (jamais plus vite que l’intervalle de rafraîchissement) : réessayez dans {seconds} s.',
   },
   testNoConfig: {
     en: 'Enter the IP address of the bridge first.',

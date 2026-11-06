@@ -106,7 +106,7 @@ Le verrouillage reste en attente, sans partir, dans ces cas seulement :
 
 Un verrouillage cliqué avant que `/data` soit lu (au démarrage) est gardé et
 fusionné avec ce que `/data` contient. Si `/data` est illisible, le verrouillage
-part quand même ; `/data` est relu à chaque tour, et dès qu'il redevient lisible
+part quand même ; `/data` est relu toutes les 10 s, et dès qu'il redevient lisible
 le verrouillage y est écrit (ou celui qu'il contenait part aussitôt).
 
 Le statut dit où en est un verrouillage en attente : pas encore parti, en cours

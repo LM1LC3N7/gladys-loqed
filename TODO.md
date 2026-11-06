@@ -101,8 +101,12 @@ Handoff document: what is done, what was decided, what comes next.
   the interval (a newer read is reused).
 - **/data** (review r1, B1/B2): a lock clicked before or while /data is read
   is merged with what it holds (the latest click wins), written, sent first.
-  /data unreadable (or slow past 2 s) is read again, bounded, at each round
-  (poll, waiting-lock round); once readable, its lock leaves at once.
+  /data unreadable (or slow past 2 s) is read again, bounded, every 10 s on
+  a timer of its own (review r2, I1) and at each scheduled read; once
+  readable, its lock leaves at once and the 10 s round is armed. The round
+  of a waiting lock never waits for /data (r2, m3). The status is sent again
+  at every result of a lock (r2, m1). The test button tells the time left;
+  only a test that read holds the next one for the interval (r2, m2).
 - **Replays after a restart** (review r1, m1): the replay cache lives in
   memory; a webhook dated (bridge time) before the start only triggers a
   read.
