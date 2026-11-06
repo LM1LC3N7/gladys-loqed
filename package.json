@@ -1,6 +1,6 @@
 {
   "name": "gladys-loqed",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "description": "Gladys Assistant external integration for the LOQED Touch smart lock, over the local API of its bridge. Unofficial, not affiliated with LOQED.",
   "type": "module",

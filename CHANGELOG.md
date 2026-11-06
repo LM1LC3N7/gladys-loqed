@@ -10,6 +10,8 @@ the notes of the version's GitHub Release.
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-11-06
+
 ### Added
 
 - LOQED Touch smart lock through the local API of its bridge: lock state
@@ -21,3 +23,6 @@ the notes of the version's GitHub Release.
 - Webhooks of the bridge through the `loqed-webhook` receiver: signature,
   time, replay, sender and bridge checked; registered by the integration.
 - "Test the connection" and "Use the bridge now answering" actions.
+
+[Unreleased]: https://github.com/LM1LC3N7/gladys-loqed/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/LM1LC3N7/gladys-loqed/releases/tag/v0.1.1
